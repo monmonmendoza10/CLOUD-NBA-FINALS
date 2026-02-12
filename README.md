@@ -144,6 +144,8 @@ Every push to `main` triggers:
 4. ✅ Health checks
 5. ✅ Website live in ~30 seconds
 
+**⚠️ DEPLOYMENT FAILING?** → Follow [GITHUB_SECRETS_QUICK_FIX.md](GITHUB_SECRETS_QUICK_FIX.md) (5 minutes to fix!)
+
 **GitHub Secrets Required:**
 ```
 AZURE_CREDENTIALS      # Service principal JSON
