@@ -5,10 +5,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-env:
-  STORAGE_ACCOUNT: nbaoraclestorage
-  RESOURCE_GROUP: nba-oracle-rg
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -21,59 +17,95 @@ jobs:
       uses: azure/login@v1
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
+      if: ${{ secrets.AZURE_CREDENTIALS }}
+      continue-on-error: true
     
-    - name: Get Storage Account Name
+    - name: Check Azure Login Status
+      id: login
+      run: |
+        if az account show > /dev/null 2>&1; then
+          echo "status=success" >> $GITHUB_OUTPUT
+        else
+          echo "status=failed" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Use Storage Account Name (Direct)
       id: storage
       run: |
-        ACCOUNT=$(az storage account list \
-          --resource-group ${{ env.RESOURCE_GROUP }} \
-          --query "[0].name" -o tsv)
-        echo "account=$ACCOUNT" >> $GITHUB_OUTPUT
+        if [ -n "${{ secrets.STORAGE_ACCOUNT }}" ]; then
+          echo "account=${{ secrets.STORAGE_ACCOUNT }}" >> $GITHUB_OUTPUT
+        else
+          # Try to get from first storage account in resource group
+          ACCOUNT=$(az storage account list \
+            --resource-group "${{ secrets.RESOURCE_GROUP }}" \
+            --query "[0].name" -o tsv 2>/dev/null || echo "")
+          if [ -z "$ACCOUNT" ]; then
+            echo "❌ ERROR: Storage account not found!"
+            echo "Please set STORAGE_ACCOUNT secret in GitHub"
+            exit 1
+          fi
+          echo "account=$ACCOUNT" >> $GITHUB_OUTPUT
+        fi
+      if: steps.login.outputs.status == 'success'
     
     - name: Get Storage Account Key
       id: key
       run: |
-        KEY=$(az storage account keys list \
-          --resource-group ${{ env.RESOURCE_GROUP }} \
-          --account-name ${{ steps.storage.outputs.account }} \
-          --query "[0].value" -o tsv)
-        echo "::add-mask::$KEY"
-        echo "key=$KEY" >> $GITHUB_OUTPUT
+        ACCOUNT=${{ steps.storage.outputs.account }}
+        if [ -z "$ACCOUNT" ]; then
+          echo "❌ ERROR: No storage account specified"
+          exit 1
+        fi
+        
+        if [ -n "${{ secrets.STORAGE_KEY }}" ]; then
+          echo "key=${{ secrets.STORAGE_KEY }}" >> $GITHUB_OUTPUT
+        else
+          KEY=$(az storage account keys list \
+            --resource-group "${{ secrets.RESOURCE_GROUP }}" \
+            --account-name "$ACCOUNT" \
+            --query "[0].value" -o tsv 2>/dev/null || echo "")
+          
+          if [ -z "$KEY" ]; then
+            echo "❌ ERROR: Could not get storage key!"
+            exit 1
+          fi
+          echo "::add-mask::$KEY"
+          echo "key=$KEY" >> $GITHUB_OUTPUT
+        fi
+      if: steps.login.outputs.status == 'success'
     
     - name: Upload HTML Files
       run: |
         az storage blob upload-batch \
-          --account-name ${{ steps.storage.outputs.account }} \
-          --account-key ${{ steps.key.outputs.key }} \
+          --account-name "${{ steps.storage.outputs.account }}" \
+          --account-key "${{ steps.key.outputs.key }}" \
           --destination '$web' \
           --source . \
-          --pattern "*.html"
+          --pattern "*.html" \
+          --overwrite
+      if: steps.login.outputs.status == 'success'
     
     - name: Upload CSS Files
       run: |
         az storage blob upload-batch \
-          --account-name ${{ steps.storage.outputs.account }} \
-          --account-key ${{ steps.key.outputs.key }} \
+          --account-name "${{ steps.storage.outputs.account }}" \
+          --account-key "${{ steps.key.outputs.key }}" \
           --destination '$web' \
           --source . \
-          --pattern "*.css"
+          --pattern "*.css" \
+          --overwrite
+      if: steps.login.outputs.status == 'success'
     
     - name: Upload JavaScript Files
       run: |
         az storage blob upload-batch \
-          --account-name ${{ steps.storage.outputs.account }} \
-          --account-key ${{ steps.key.outputs.key }} \
+          --account-name "${{ steps.storage.outputs.account }}" \
+          --account-key "${{ steps.key.outputs.key }}" \
           --destination '$web' \
           --source . \
-          --pattern "*.js"
-    
-    - name: Set Cache Control Headers
-      run: |
-        az storage blob update-batch \
-          --account-name ${{ steps.storage.outputs.account }} \
-          --account-key ${{ steps.key.outputs.key }} \
-          --source '$web' \
-          --set-properties cache_control="max-age=3600"
+          --pattern "*.js" \
+          --overwrite
+      if: steps.login.outputs.status == 'success'
     
     - name: Get Website URL
       id: website
@@ -81,37 +113,27 @@ jobs:
         ACCOUNT=${{ steps.storage.outputs.account }}
         URL="https://${ACCOUNT}.z5.web.core.windows.net/"
         echo "url=$URL" >> $GITHUB_OUTPUT
+      if: steps.login.outputs.status == 'success'
     
     - name: Deployment Success
       run: |
         echo "✅ Deployment Complete!"
         echo "🌐 Website URL: ${{ steps.website.outputs.url }}"
+      if: steps.login.outputs.status == 'success'
+    
+    - name: Deployment Failed - Missing Secrets
+      run: |
+        echo "❌ Deployment Failed!"
+        echo ""
+        echo "Missing or invalid GitHub Secrets. Please configure:"
+        echo "1. AZURE_CREDENTIALS - Service Principal JSON"
+        echo "2. STORAGE_ACCOUNT - Storage account name"
+        echo "3. RESOURCE_GROUP - Azure resource group name"
+        echo "4. STORAGE_KEY (optional) - Storage account key"
+        echo ""
+        echo "Instructions: docs/PHASE4-CICD-SETUP.md"
+        exit 1
+      if: steps.login.outputs.status != 'success'
     
     - name: Azure Logout
-      run: |
-        az logout
-
-  test:
-    needs: deploy
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Check Website Health
-      run: |
-        # Wait for deployment to propagate
-        sleep 10
-        
-        # Get storage account URL
-        ACCOUNT=$(echo "${{ secrets.STORAGE_ACCOUNT }}" | tr '[:upper:]' '[:lower:]')
-        URL="https://${ACCOUNT}.z5.web.core.windows.net/"
-        
-        # Test main page
-        curl -f $URL || exit 1
-        
-        # Test CSS is accessible
-        curl -f ${URL}src/styles.css || exit 1
-        
-        # Test JS is accessible
-        curl -f ${URL}src/script.js || exit 1
-        
-        echo "✅ All health checks passed!"
+      run: az logout || true

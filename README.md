@@ -133,7 +133,7 @@ python ml/deploy_model.py
 
 ---
 
-## 🔄 PHASE 4: CI/CD with GitHub Actions
+## � PHASE 4: CI/CD with GitHub Actions
 
 ### Automatic Deployment
 
@@ -150,8 +150,10 @@ AZURE_CREDENTIALS      # Service principal JSON
 STORAGE_ACCOUNT        # Storage account name
 RESOURCE_GROUP         # Resource group name
 SUBSCRIPTION_ID        # Azure subscription ID
-ML_API_KEY            # ML endpoint key
+ML_API_KEY            # ML endpoint key (optional)
 ```
+
+**⚠️ Setup Instructions**: See [SETUP_GITHUB_SECRETS.md](SETUP_GITHUB_SECRETS.md)
 
 ### Deploy to Production
 
@@ -288,6 +290,11 @@ az ml online-endpoint get-logs \
 
 ## 📚 Resources
 
+- **Quick Start**: [QUICKSTART.md](QUICKSTART.md) - 5-minute overview
+- **GitHub Secrets Setup**: [SETUP_GITHUB_SECRETS.md](SETUP_GITHUB_SECRETS.md) - Fix deployment issues
+- **Troubleshooting**: [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Common issues & solutions
+- **System Architecture**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Technical design
+- **Local Development**: Run `npx http-server . -p 8000` or `./start-local.sh`
 - [Azure Storage Documentation](https://docs.microsoft.com/azure/storage/)
 - [Azure ML Studio](https://ml.azure.com)
 - [GitHub Actions Marketplace](https://github.com/marketplace/actions)
