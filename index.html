@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NBA Postseason Oracle - Playoff Predictor</title>
+    <link rel="stylesheet" href="src/styles.css">
+</head>
+<body>
+    <!-- Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="logo">
+                <h1>🧠 NBA Postseason Oracle</h1>
+            </div>
+            <ul class="nav-links">
+                <li><a href="#predictor">Predictor</a></li>
+                <li><a href="#standings">Standings</a></li>
+                <li><a href="#predictions">Predictions</a></li>
+                <li><a href="#about">About</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-content">
+            <h2>The NBA Postseason Oracle</h2>
+            <p>AI-Powered Playoff Predictions Using Machine Learning</p>
+            <button class="cta-button" onclick="document.getElementById('predictor').scrollIntoView({behavior: 'smooth'})">
+                Make a Prediction
+            </button>
+        </div>
+    </section>
+
+    <!-- Standings Section -->
+    <section id="standings" class="standings-section">
+        <h3>Current Standings</h3>
+        <div class="standings-container">
+            <div class="conference">
+                <h4>Eastern Conference</h4>
+                <table class="standings-table">
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Team</th>
+                            <th>W</th>
+                            <th>L</th>
+                            <th>Win %</th>
+                            <th>Playoff Odds</th>
+                        </tr>
+                    </thead>
+                    <tbody id="east-standings">
+                        <!-- Data populated by JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+            <div class="conference">
+                <h4>Western Conference</h4>
+                <table class="standings-table">
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Team</th>
+                            <th>W</th>
+                            <th>L</th>
+                            <th>Win %</th>
+                            <th>Playoff Odds</th>
+                        </tr>
+                    </thead>
+                    <tbody id="west-standings">
+                        <!-- Data populated by JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <!-- Predictor Section -->
+    <section id="predictor" class="predictor-section">
+        <h3>Team Predictor</h3>
+        <div class="predictor-container">
+            <form id="prediction-form">
+                <div class="form-group">
+                    <label for="team-select">Select Team:</label>
+                    <select id="team-select" required>
+                        <option value="">-- Choose a team --</option>
+                    </select>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="wins">Wins:</label>
+                        <input type="number" id="wins" min="0" max="82" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="losses">Losses:</label>
+                        <input type="number" id="losses" min="0" max="82" required>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="three-point">3P% (Three-Point %):</label>
+                        <input type="number" id="three-point" min="0" max="100" step="0.1" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="def-rating">Defensive Rating:</label>
+                        <input type="number" id="def-rating" min="0" step="0.1" required>
+                    </div>
+                </div>
+
+                <button type="submit" class="predict-button">Get Prediction</button>
+            </form>
+
+            <div id="prediction-result" class="prediction-result hidden">
+                <h4>Prediction Result</h4>
+                <div class="result-content">
+                    <p id="result-text"></p>
+                    <div class="confidence-meter">
+                        <div id="confidence-bar" class="confidence-fill"></div>
+                    </div>
+                    <p id="confidence-text"></p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Predictions History Section -->
+    <section id="predictions" class="predictions-section">
+        <h3>Recent Predictions</h3>
+        <div id="predictions-list" class="predictions-list">
+            <!-- Populated by JavaScript -->
+        </div>
+    </section>
+
+    <!-- About Section -->
+    <section id="about" class="about-section">
+        <h3>About This Project</h3>
+        <div class="about-content">
+            <p>The NBA Postseason Oracle uses advanced machine learning models trained on historical NBA playoff data to predict whether a team will make the playoffs.</p>
+            <h4>Technologies Used:</h4>
+            <ul>
+                <li>Azure Blob Storage - Static website hosting</li>
+                <li>Azure ML Studio - ML model training and inference</li>
+                <li>GitHub Actions - Continuous Integration/Deployment</li>
+                <li>HTML/CSS/JavaScript - Frontend</li>
+            </ul>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <p>&copy; 2026 NBA Postseason Oracle. All rights reserved.</p>
+    </footer>
+
+    <script src="src/script.js"></script>
+</body>
+</html>

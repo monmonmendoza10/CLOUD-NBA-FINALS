@@ -1,0 +1,117 @@
+name: Deploy NBA Oracle to Azure Storage
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  STORAGE_ACCOUNT: nbaoraclestorage
+  RESOURCE_GROUP: nba-oracle-rg
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+    
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Get Storage Account Name
+      id: storage
+      run: |
+        ACCOUNT=$(az storage account list \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --query "[0].name" -o tsv)
+        echo "account=$ACCOUNT" >> $GITHUB_OUTPUT
+    
+    - name: Get Storage Account Key
+      id: key
+      run: |
+        KEY=$(az storage account keys list \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --account-name ${{ steps.storage.outputs.account }} \
+          --query "[0].value" -o tsv)
+        echo "::add-mask::$KEY"
+        echo "key=$KEY" >> $GITHUB_OUTPUT
+    
+    - name: Upload HTML Files
+      run: |
+        az storage blob upload-batch \
+          --account-name ${{ steps.storage.outputs.account }} \
+          --account-key ${{ steps.key.outputs.key }} \
+          --destination '$web' \
+          --source . \
+          --pattern "*.html"
+    
+    - name: Upload CSS Files
+      run: |
+        az storage blob upload-batch \
+          --account-name ${{ steps.storage.outputs.account }} \
+          --account-key ${{ steps.key.outputs.key }} \
+          --destination '$web' \
+          --source . \
+          --pattern "*.css"
+    
+    - name: Upload JavaScript Files
+      run: |
+        az storage blob upload-batch \
+          --account-name ${{ steps.storage.outputs.account }} \
+          --account-key ${{ steps.key.outputs.key }} \
+          --destination '$web' \
+          --source . \
+          --pattern "*.js"
+    
+    - name: Set Cache Control Headers
+      run: |
+        az storage blob update-batch \
+          --account-name ${{ steps.storage.outputs.account }} \
+          --account-key ${{ steps.key.outputs.key }} \
+          --source '$web' \
+          --set-properties cache_control="max-age=3600"
+    
+    - name: Get Website URL
+      id: website
+      run: |
+        ACCOUNT=${{ steps.storage.outputs.account }}
+        URL="https://${ACCOUNT}.z5.web.core.windows.net/"
+        echo "url=$URL" >> $GITHUB_OUTPUT
+    
+    - name: Deployment Success
+      run: |
+        echo "✅ Deployment Complete!"
+        echo "🌐 Website URL: ${{ steps.website.outputs.url }}"
+    
+    - name: Azure Logout
+      run: |
+        az logout
+
+  test:
+    needs: deploy
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Check Website Health
+      run: |
+        # Wait for deployment to propagate
+        sleep 10
+        
+        # Get storage account URL
+        ACCOUNT=$(echo "${{ secrets.STORAGE_ACCOUNT }}" | tr '[:upper:]' '[:lower:]')
+        URL="https://${ACCOUNT}.z5.web.core.windows.net/"
+        
+        # Test main page
+        curl -f $URL || exit 1
+        
+        # Test CSS is accessible
+        curl -f ${URL}src/styles.css || exit 1
+        
+        # Test JS is accessible
+        curl -f ${URL}src/script.js || exit 1
+        
+        echo "✅ All health checks passed!"

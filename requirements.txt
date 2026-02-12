@@ -1,0 +1,9 @@
+scikit-learn==1.3.2
+pandas==2.1.3
+numpy==1.24.3
+azure-ai-ml==1.11.1
+azure-identity==1.14.0
+azure-storage-blob==12.18.3
+requests==2.31.0
+python-dotenv==1.0.0
+joblib==1.3.2
