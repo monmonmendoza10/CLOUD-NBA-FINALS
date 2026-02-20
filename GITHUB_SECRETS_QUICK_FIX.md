@@ -4,7 +4,7 @@
 
 Your GitHub Actions workflow is failing because **GitHub Secrets are missing**.
 
-Look at your Actions tab - you have 2 failed runs. This is because the workflow needs credentials to access Azure.
+Look at your Actions tab - you have failed runs. This is because the workflow needs credentials to access Azure.
 
 ---
 
@@ -201,4 +201,4 @@ Website is LIVE! 🌐
 
 **That's it! After adding the 4 secrets and pushing, your GitHub deployment should work.** 🎉
 
-Message me if you hit any errors!
+For detailed version, see: [SETUP_GITHUB_SECRETS.md](SETUP_GITHUB_SECRETS.md)

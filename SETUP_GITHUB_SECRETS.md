@@ -159,9 +159,9 @@ Watch the workflow at: **Actions** tab → **Deploy NBA Oracle to Azure Storage*
 ### Issue: "Storage account key is invalid"
 - **Solution**: Get fresh key:
   ```powershell
-  az storage account keys renew \
-    --resource-group nba-oracle-rg \
-    --account-name YourStorageAccountName \
+  az storage account keys renew `
+    --resource-group nba-oracle-rg `
+    --account-name YourStorageAccountName `
     --key primary
   ```
 
@@ -185,4 +185,4 @@ After secrets are configured:
 
 ---
 
-**Still stuck?** Check [PHASE4-CICD-SETUP.md](PHASE4-CICD-SETUP.md) for detailed instructions.
+**Still stuck?** Check [GITHUB_SECRETS_QUICK_FIX.md](GITHUB_SECRETS_QUICK_FIX.md) for a quicker version.
