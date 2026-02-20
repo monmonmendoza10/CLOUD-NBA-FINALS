@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  
+env:
+  NODE_VERSION: '18.x'
 
 jobs:
   deploy:
@@ -107,7 +110,29 @@ jobs:
           --overwrite
       if: steps.login.outputs.status == 'success'
     
-    - name: Get Website URL
+    - name: Upload CSV Data Files
+      run: |
+        az storage blob upload-batch \
+          --account-name "${{ steps.storage.outputs.account }}" \
+          --account-key "${{ steps.key.outputs.key }}" \
+          --destination '$web' \
+          --source . \
+          --pattern "*.csv" \
+          --overwrite
+      if: steps.login.outputs.status == 'success'
+    
+    - name: Upload All HTML/CSS/JS Recursively
+      run: |
+        find . -type f \( -name "*.html" -o -name "*.css" -o -name "*.js" -o -name "*.csv" -o -name "*.json" \) ! -path "./.git/*" ! -path "./.github/*" | while read file; do
+          az storage blob upload \
+            --account-name "${{ steps.storage.outputs.account }}" \
+            --account-key "${{ steps.key.outputs.key }}" \
+            --container-name '$web' \
+            --name "${file#./}" \
+            --file "$file" \
+            --overwrite
+        done
+      if: steps.login.outputs.status == 'success'
       id: website
       run: |
         ACCOUNT=${{ steps.storage.outputs.account }}
