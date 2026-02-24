@@ -188,7 +188,7 @@ function renderDivision(divKey) {
         });
 
         if (divMatches.length > 0) {
-            html += '<h3 style="margin-top:24px; font-size:14px; text-transform:uppercase; border-bottom:2px solid #8b5cf6; padding-bottom:8px; letter-spacing:1px; color:#f1f5f9;">Feb 20 Predictions (PHT)</h3>';
+            html += '<h3 style="margin-top:24px; font-size:14px; text-transform:uppercase; border-bottom:2px solid #8b5cf6; padding-bottom:8px; letter-spacing:1px; color:#f1f5f9;">Match Predictions</h3>';
             html += '<div class="oracle-matches-grid">';
 
             divMatches.forEach(match => {
