@@ -1,0 +1,57 @@
+{
+    "oracle_metadata": {
+        "model": "VotingEnsemble v1.0",
+        "last_updated": "2026-02-05",
+        "global_accuracy": "1.0000"
+    },
+    "teams": [
+        {
+            "id": "BOSS",
+            "name": "Boston Celtics",
+            "win_prob": 0.99,
+            "conf": "East"
+        },
+        {
+            "id": "OKC",
+            "name": "OKC Thunder",
+            "win_prob": 0.95,
+            "conf": "West"
+        },
+        {
+            "id": "LAL",
+            "name": "LA Lakers",
+            "win_prob": 0.72,
+            "conf": "West"
+        },
+        {
+            "id": "GSW",
+            "name": "Golden State Warriors",
+            "win_prob": 0.68,
+            "conf": "West"
+        },
+        {
+            "id": "MIA",
+            "name": "Miami Heat",
+            "win_prob": 0.54,
+            "conf": "East"
+        },
+        {
+            "id": "CHI",
+            "name": "Chicago Bulls",
+            "win_prob": 0.41,
+            "conf": "East"
+        },
+        {
+            "id": "SAS",
+            "name": "San Antonio Spurs",
+            "win_prob": 0.12,
+            "conf": "West"
+        },
+        {
+            "id": "DET",
+            "name": "Detroit Pistons",
+            "win_prob": 0.04,
+            "conf": "East"
+        }
+    ]
+}

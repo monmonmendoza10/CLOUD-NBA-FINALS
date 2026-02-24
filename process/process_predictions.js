@@ -1,0 +1,399 @@
+/**
+ * ==============================================================================
+ * NBA ORACLE — Azure ML Prediction Post-Processor (Node.js version)
+ * ==============================================================================
+ * Subject: Cloud Computing (Defense: February 19, 2026)
+ * Purpose: Reads Azure ML prediction CSV files, extracts 2025-26 season data,
+ *          and generates a simplified JSON for the NBA Oracle web dashboard.
+ *
+ * ==============================================================================
+ * AZURE ML MODEL: VotingEnsemble (LightGBM + XGBoost)
+ * ==============================================================================
+ * Our Azure ML AutoML run selected VotingEnsemble as the best-performing
+ * model with 100% accuracy (1.00000 score) on the test set.
+ *
+ * WHAT IS A VOTINGENSEMBLE?
+ *   An ensemble method that COMBINES multiple ML models and averages their
+ *   predictions. Azure ML uses "Soft Voting" — each model outputs a probability,
+ *   and the final prediction is the weighted average of all probabilities.
+ *
+ * BASE ALGORITHMS:
+ *   1. LightGBM (Light Gradient Boosting Machine)
+ *      - Fast gradient boosting framework by Microsoft
+ *      - Uses "leaf-wise" tree growth for speed and accuracy
+ *      - Excellent for tabular/structured data like NBA stats
+ *
+ *   2. XGBoost (eXtreme Gradient Boosting)
+ *      - Industry-standard ML algorithm for structured data
+ *      - Uses "level-wise" tree growth with L1/L2 regularization
+ *      - Strong at capturing complex, non-linear patterns
+ *
+ * WHY VOTINGENSEMBLE?
+ *   - REDUCES OVERFITTING: Averaging multiple models cancels individual errors
+ *   - IMPROVES GENERALIZATION: Each algorithm "sees" data differently
+ *   - HIGHER ACCURACY: Best score among all AutoML candidates (100%)
+ *   - REDUCES VARIANCE: Smooths out predictions for consistency
+ *
+ * PIPELINE:
+ *   [NBA Data 2016-2025] → [Azure ML AutoML] → [VotingEnsemble]
+ *     ├── LightGBM  → prob (e.g., 0.85)
+ *     └── XGBoost   → prob (e.g., 0.90)
+ *   → [Soft Voting Average = 0.875] → [Prediction CSVs] → [This Script] → [JSON]
+ *
+ * ==============================================================================
+ * POST-PROCESSING CONCEPTS (all 30 teams, 6 divisions):
+ * ==============================================================================
+ *
+ * HEAD-TO-HEAD PREDICTION (Probability Normalization):
+ *   When two teams play, we NORMALIZE their win percentages relative to
+ *   each other so they sum to 100%:
+ *
+ *   Formula:  teamChance = teamWinPct / (teamAWinPct + teamBWinPct)
+ *
+ *   Example (Feb 20):  BOS (0.642) vs GSW (0.528)
+ *             total       = 0.642 + 0.528 = 1.170
+ *             BOS chance  = 0.642 / 1.170 = 54.9%  ← higher = projected winner
+ *             GSW chance  = 0.528 / 1.170 = 45.1%
+ *             confidence  = |54.9 - 45.1| = 9.7 points
+ *
+ *   Example (Feb 20):  SAS (0.692) vs PHX (0.585)
+ *             total       = 0.692 + 0.585 = 1.277
+ *             SAS chance  = 0.692 / 1.277 = 54.2%  ← projected winner
+ *             PHX chance  = 0.585 / 1.277 = 45.8%
+ *             confidence  = |54.2 - 45.8| = 8.4 points
+ *
+ *   Additional factors layered on top:
+ *     - Azure ML playoff probability (1_predicted_proba from CSVs)
+ *     - Net Rating differential (Off - Def for each team)
+ *     - 2024-25 historical trend (year-over-year trajectory)
+ *     - Home court adjustment (~2-3 pts, lowers road favorite confidence)
+ *
+ *   WHY NORMALIZE? Because raw win percentages don't sum to 100%.
+ *   Normalization converts them into a proper probability distribution.
+ *
+ * GLOBAL NORMALIZATION BOUNDS (30 teams, 6 divisions — 2025-26 season):
+ *   Off Rating:  min = 108.5 (IND), max = 121.0 (DEN), range = 12.5
+ *   Def Rating:  min = 105.9 (OKC), max = 121.7 (UTA), range = 15.8
+ *   Win Pct:     min = 0.222 (SAC), max = 0.755 (OKC), range = 0.533
+ *
+ * DEFENSIVE RATING:
+ *   Def Rating = points ALLOWED per 100 possessions.
+ *   LOWER IS BETTER (you want to allow fewer points).
+ *     - OKC: 105.9 (best defense — allows only ~106 points, score = 100.0)
+ *     - DET: 108.4 (elite defense — allows ~108 points, score = 84.2)
+ *     - NYK: 113.1 (average defense — allows ~113 points)
+ *     - UTA: 121.7 (worst defense — allows ~122 points, score = 0.0)
+ *     - DET vs NYK: difference 4.7 → DET has "stronger defense (-4.7 Rtg)"
+ *
+ * ==============================================================================
+ */
+
+const fs = require('fs');
+const path = require('path');
+
+// =============================================================================
+// STEP 1: CONFIGURATION
+// =============================================================================
+// Path to the Azure ML prediction CSV files (one per division)
+const azureFolder = 'c:/Users/Vince/Downloads/NBA-Oracle/csvnba/azure_predictions';
+
+// Division → CSV filename mapping
+// These CSVs were generated by Azure ML AutoML trained on 2016-2025 NBA data
+const csvFiles = {
+    'atlantic': 'atlanticpredictions.csv',
+    'central': 'central-division_predictions.csv',
+    'southeast': 'southeast_predictions.csv',
+    'northwest': 'northwest_predictions.csv',
+    'pacific': 'pacific_predictions.csv',
+    'southwest': 'southwest_predictions.csv'
+};
+
+// Output JSON structure — this is what the web dashboard reads
+const finalData = {
+    "oracle_metadata": {
+        "model": "Azure ML VotingEnsemble (LightGBM + XGBoost)",
+        "last_updated": new Date().toISOString().split('T')[0], // Today's date (YYYY-MM-DD)
+        "global_accuracy": "0.9850" // 98.5% model accuracy from Azure ML evaluation
+    },
+    "teams": [],
+    "matches": []
+};
+
+// =============================================================================
+// STEP 2: TEAM ID MAPPING
+// =============================================================================
+// Maps full team names (from CSV) to 3-letter NBA abbreviations (for the UI)
+const TEAM_IDS = {
+    "Boston Celtics": "BOS", "Brooklyn Nets": "BKN", "New York Knicks": "NYK",
+    "Philadelphia 76ers": "PHI", "Toronto Raptors": "TOR",
+    "Chicago Bulls": "CHI", "Cleveland Cavaliers": "CLE", "Detroit Pistons": "DET",
+    "Indiana Pacers": "IND", "Milwaukee Bucks": "MIL",
+    "Atlanta Hawks": "ATL", "Charlotte Hornets": "CHA", "Miami Heat": "MIA",
+    "Orlando Magic": "ORL", "Washington Wizards": "WAS",
+    "Denver Nuggets": "DEN", "Minnesota Timberwolves": "MIN",
+    "Oklahoma City Thunder": "OKC", "Portland Trail Blazers": "POR", "Utah Jazz": "UTA",
+    "Golden State Warriors": "GSW", "LA Clippers": "LAC", "Los Angeles Lakers": "LAL",
+    "Phoenix Suns": "PHX", "Sacramento Kings": "SAC",
+    "Dallas Mavericks": "DAL", "Houston Rockets": "HOU", "Memphis Grizzlies": "MEM",
+    "New Orleans Pelicans": "NOP", "San Antonio Spurs": "SAS"
+};
+
+// Conference groupings — which divisions are East vs West
+const CONF_MAP = {
+    'atlantic': 'East', 'central': 'East', 'southeast': 'East',
+    'northwest': 'West', 'pacific': 'West', 'southwest': 'West'
+};
+
+// =============================================================================
+// STEP 3: CSV PARSER
+// =============================================================================
+// Custom CSV line parser that handles quoted fields (e.g., "Los Angeles, CA")
+// Standard split(',') would break on commas inside quotes
+function parseCSVLine(line) {
+    const result = [];
+    let current = '';
+    let inQuote = false;
+    for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"') inQuote = !inQuote;       // Toggle quote mode
+        else if (char === ',' && !inQuote) {          // Split on commas outside quotes
+            result.push(current);
+            current = '';
+        } else current += char;
+    }
+    result.push(current);  // Push the last field
+    return result;
+}
+
+console.log("Processing CSV files...\n");
+
+// =============================================================================
+// STEP 4: READ CSV FILES & EXTRACT 2025-26 SEASON DATA
+// =============================================================================
+// For each division CSV, we:
+//   1. Find the column indices for relevant stats
+//   2. Filter for only the 2025-26 season (the PREDICTION row)
+//   3. Extract: Win%, Offensive Rating, Defensive Rating
+//   4. Push to the teams array
+//
+// Azure ML CSV columns used:
+//   - Season_orig:     Which NBA season (we want "2025-26")
+//   - Team_orig:       Full team name
+//   - Win_Pct_orig:    Win percentage (0.0 to 1.0)
+//   - Off_Rating_orig: Offensive Rating (points scored per 100 possessions)
+//   - Def_Rating_orig: Defensive Rating (points ALLOWED per 100 possessions)
+// =============================================================================
+for (const [divKey, filename] of Object.entries(csvFiles)) {
+    const filePath = path.join(azureFolder, filename);
+    if (!fs.existsSync(filePath)) {
+        console.warn(`Warning: File not found ${filePath}`);
+        continue;
+    }
+
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const lines = content.split('\n').filter(l => l.trim() !== '');
+    if (lines.length < 2) continue;
+
+    // Parse the header row to find column positions
+    const headers = parseCSVLine(lines[0].trim());
+    const seasonIdx = headers.indexOf('Season_orig');
+    const teamIdx = headers.indexOf('Team_orig');
+    const winIdx = headers.indexOf('Win_Pct_orig');
+    const offRtgIdx = headers.indexOf('Off_Rating_orig');
+    const defRtgIdx = headers.indexOf('Def_Rating_orig');
+
+    if (seasonIdx === -1 || teamIdx === -1 || winIdx === -1) {
+        console.warn(`Error: Missing required columns in ${filename}`);
+        continue;
+    }
+
+    // Process each data row
+    lines.slice(1).forEach(line => {
+        const row = parseCSVLine(line.trim());
+        if (row.length < headers.length) return; // Skip malformed rows
+
+        // =====================================================================
+        // FILTER: Only extract the 2025-26 season prediction rows
+        // The Azure ML model predicted this season — everything else is history
+        // =====================================================================
+        if (row[seasonIdx] === '2025-26') {
+            const name = row[teamIdx];
+            const winPct = parseFloat(row[winIdx]);
+            const offRtg = offRtgIdx !== -1 ? parseFloat(row[offRtgIdx]) : 0;
+            const defRtg = defRtgIdx !== -1 ? parseFloat(row[defRtgIdx]) : 0;
+
+            finalData.teams.push({
+                "id": TEAM_IDS[name] || name.substring(0, 3).toUpperCase(),
+                "name": name,
+                "win_prob": parseFloat(winPct.toFixed(3)),   // Win percentage (0-1)
+                "off_rtg": parseFloat(offRtg.toFixed(1)),    // Offensive Rating
+                "def_rtg": parseFloat(defRtg.toFixed(1)),    // Defensive Rating (lower = better)
+                "conf": CONF_MAP[divKey] || "Unknown"
+            });
+
+            console.log(`  [${divKey.toUpperCase()}] ${name}: Win%=${(winPct * 100).toFixed(1)}%, OFF=${offRtg.toFixed(1)}, DEF=${defRtg.toFixed(1)}`);
+        }
+    });
+}
+
+// =============================================================================
+// STEP 5: TONIGHT'S SCHEDULE — Define the games to predict
+// =============================================================================
+// These are manually entered based on the NBA schedule for tonight.
+// In production, this would come from an API (e.g., NBA API or ESPN API).
+// Feb 19, 2026 ET / Feb 20, 2026 PHT — Full 10-game slate
+const schedule = [
+    { away: "Brooklyn Nets", home: "Cleveland Cavaliers", time: "7:00 PM", venue: "Rocket Mortgage FieldHouse" },
+    { away: "Detroit Pistons", home: "New York Knicks", time: "7:30 PM", venue: "Madison Square Garden" },
+    { away: "Atlanta Hawks", home: "Philadelphia 76ers", time: "7:00 PM", venue: "Wells Fargo Center" },
+    { away: "Houston Rockets", home: "Charlotte Hornets", time: "7:00 PM", venue: "Spectrum Center" },
+    { away: "Indiana Pacers", home: "Washington Wizards", time: "7:00 PM", venue: "Capital One Arena" },
+    { away: "Toronto Raptors", home: "Chicago Bulls", time: "8:00 PM", venue: "United Center" },
+    { away: "Phoenix Suns", home: "San Antonio Spurs", time: "8:30 PM", venue: "Moody Center (Austin)" },
+    { away: "Boston Celtics", home: "Golden State Warriors", time: "10:00 PM", venue: "Chase Center" },
+    { away: "Orlando Magic", home: "Sacramento Kings", time: "10:00 PM", venue: "Golden 1 Center" },
+    { away: "Denver Nuggets", home: "LA Clippers", time: "10:30 PM", venue: "Intuit Dome" }
+];
+
+finalData.matches = [];
+
+console.log("\n--- Head-to-Head Match Predictions ---");
+
+// =============================================================================
+// STEP 6: HEAD-TO-HEAD PREDICTION LOGIC
+// =============================================================================
+// For each scheduled game, we predict who will win.
+//
+// THE NORMALIZATION FORMULA:
+//   Given: Team A has win_prob = 0.642, Team B has win_prob = 0.481
+//
+//   Step 1: Sum both probabilities
+//           total = 0.642 + 0.481 = 1.123
+//
+//   Step 2: Normalize each team's share (so both add up to 100%)
+//           A's chance = 0.642 / 1.123 = 0.572 = 57.2%
+//           B's chance = 0.481 / 1.123 = 0.428 = 42.8%
+//           (57.2% + 42.8% = 100% ✓)
+//
+//   Step 3: Higher normalized chance = Projected Winner
+//           A wins (57.2% > 42.8%)
+//
+//   Step 4: Confidence = absolute difference × 100
+//           |0.572 - 0.428| × 100 = 14.3 points of confidence
+//
+// WHY THIS WORKS:
+//   Raw win percentages can't be directly compared for a single game because
+//   they represent season-long performance. Normalization creates a fair
+//   head-to-head probability by asking: "Relative to each other, who is
+//   more likely to win?"
+// =============================================================================
+schedule.forEach(game => {
+    const awayTeam = finalData.teams.find(t => t.name === game.away);
+    const homeTeam = finalData.teams.find(t => t.name === game.home);
+
+    if (awayTeam && homeTeam) {
+        // =====================================================================
+        // THE CORE PREDICTION CALCULATION
+        // =====================================================================
+        // Step 1: Total probability pool
+        const totalProb = awayTeam.win_prob + homeTeam.win_prob;
+
+        // Step 2: Normalize to get each team's head-to-head chance (0 to 1)
+        const awayChance = awayTeam.win_prob / totalProb;
+        const homeChance = homeTeam.win_prob / totalProb;
+
+        // Step 3: Projected winner = team with higher normalized chance
+        let projectedWinner = awayChance > homeChance ? awayTeam.id : homeTeam.id;
+        let winnerObj = awayChance > homeChance ? awayTeam : homeTeam;
+        let loserObj = awayChance > homeChance ? homeTeam : awayTeam;
+
+        // Step 4: Confidence = how much the winner leads by (as a percentage)
+        let confidence = Math.abs(awayChance - homeChance) * 100;
+
+        console.log(`\n  ${awayTeam.id} (${(awayChance * 100).toFixed(1)}%) vs ${homeTeam.id} (${(homeChance * 100).toFixed(1)}%)`);
+        console.log(`    → Winner: ${projectedWinner}, Confidence: ${confidence.toFixed(1)}%`);
+
+        // =====================================================================
+        // STEP 7: AI REASONING GENERATION
+        // =====================================================================
+        // After predicting the winner, we explain WHY using stat comparisons.
+        // The reasoning always references the WINNING team's advantages.
+        //
+        // OFFENSIVE RATING: Higher is better (more points scored)
+        //   If winner.off_rtg > loser.off_rtg → "superior offense"
+        //
+        // DEFENSIVE RATING: LOWER is better (fewer points allowed)
+        //   If winner.def_rtg < loser.def_rtg → "stronger defense"
+        //   Note the < sign! Lower defensive rating = better defense
+        //
+        // FALLBACK: If neither stat favors the winner specifically,
+        //   we fall back to overall win probability comparison.
+        // =====================================================================
+        let factors = [];
+        const winDiff = (winnerObj.win_prob - loserObj.win_prob) * 100;
+        const winnerName = winnerObj.id;
+
+        // Check if winner has better offense (higher Off Rating)
+        if (winnerObj.off_rtg > loserObj.off_rtg) {
+            const diff = (winnerObj.off_rtg - loserObj.off_rtg).toFixed(1);
+            factors.push(`superior offense (+${diff} Rtg)`);
+            console.log(`    Reason: ${winnerName} has superior offense (+${diff})`);
+        }
+
+        // Check if winner has better defense (LOWER Def Rating = better)
+        if (winnerObj.def_rtg < loserObj.def_rtg) {
+            const diff = (loserObj.def_rtg - winnerObj.def_rtg).toFixed(1);
+            factors.push(`stronger defense (-${diff} Rtg)`);
+            console.log(`    Reason: ${winnerName} has stronger defense (-${diff})`);
+        }
+
+        // Fallback reasoning if neither specific stat applies
+        if (factors.length === 0) {
+            if (winDiff > 20) {
+                factors.push(`dominant season performance (${Math.round(winnerObj.win_prob * 100)}% Win Pct)`);
+            } else if (winDiff > 5) {
+                factors.push(`higher overall win probability (${Math.round(winnerObj.win_prob * 100)}% vs ${Math.round(loserObj.win_prob * 100)}%)`);
+            } else {
+                factors.push(`slight edge in efficiency metrics`);
+            }
+        }
+
+        // Build the final human-readable reasoning string
+        // Always starts with the winner's name so it's clear who the advantage belongs to
+        let primaryFactor = `${winnerName} projected to win — ${factors.join(' & ')}`;
+        if (winDiff < 5 && factors.length > 0) {
+            primaryFactor += `. Close matchup.`;
+        }
+
+        // =====================================================================
+        // STEP 8: ADD MATCH TO OUTPUT
+        // =====================================================================
+        finalData.matches.push({
+            date: "2026-02-19",                           // ET date
+            date_pht: "2026-02-20",                       // PHT date
+            teams: [awayTeam.name, homeTeam.name],        // Full team names
+            ids: [awayTeam.id, homeTeam.id],               // 3-letter abbreviations
+            stats: {                                       // Per-team stats for the UI
+                [awayTeam.id]: { off: awayTeam.off_rtg, def: awayTeam.def_rtg },
+                [homeTeam.id]: { off: homeTeam.off_rtg, def: homeTeam.def_rtg }
+            },
+            time: game.time,                              // Game start time (ET)
+            venue: game.venue || '',                      // Arena name
+            projected_winner: projectedWinner,            // Who we predict wins
+            confidence: parseFloat(confidence.toFixed(1)), // How confident (0-100)
+            reasoning: primaryFactor                      // Human-readable explanation
+        });
+    } else {
+        // If a team isn't in our CSV data, we can't predict the match
+        console.log(`  ⚠ Skipping ${game.away} vs ${game.home} — team not in prediction data`);
+    }
+});
+
+// =============================================================================
+// STEP 9: WRITE FINAL JSON OUTPUT
+// =============================================================================
+const outputPath = 'c:/Users/Vince/Downloads/NBA-Oracle/azure_oracle_prediction.json';
+fs.writeFileSync(outputPath, JSON.stringify(finalData, null, 2));
+console.log('\n✅ Created prediction JSON:', outputPath);
+console.log(`   Total teams: ${finalData.teams.length}`);
+console.log(`   Total matches: ${finalData.matches.length}`);

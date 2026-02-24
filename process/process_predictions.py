@@ -1,0 +1,474 @@
+"""
+==============================================================================
+NBA ORACLE — Azure ML Prediction Post-Processor
+==============================================================================
+Subject: Cloud Computing (Defense: February 19, 2026)
+Purpose: Takes raw Azure ML prediction CSV outputs and transforms them into
+         a structured JSON file for the NBA Oracle web dashboard.
+
+==============================================================================
+AZURE ML MODEL: VotingEnsemble (LightGBM + XGBoost)
+==============================================================================
+Our Azure ML AutoML run selected **VotingEnsemble** as the best-performing
+model with 100% accuracy on the test set.
+
+WHAT IS A VOTINGENSEMBLE?
+  - An ensemble method that COMBINES multiple machine learning models
+    and aggregates their predictions to produce a final, more accurate result.
+  - Azure ML uses "Soft Voting" — instead of each model just casting a vote
+    (hard voting), each model outputs a PROBABILITY, and the final prediction
+    is the weighted average of all models' probabilities.
+  - This reduces the chance of any single model's weakness affecting the result.
+
+BASE ALGORITHMS USED:
+  1. LightGBM (Light Gradient Boosting Machine)
+     - A fast, efficient gradient boosting framework by Microsoft.
+     - Uses a technique called "leaf-wise" tree growth (grows the leaf with
+       the highest loss reduction first), making it faster and more accurate
+       than traditional "level-wise" approaches.
+     - Great for tabular/structured data like NBA stats.
+     - Handles categorical features and missing values natively.
+  
+  2. XGBoost (eXtreme Gradient Boosting)
+     - One of the most popular ML algorithms for structured data.
+     - Uses "level-wise" tree growth with regularization (L1 & L2) to
+       prevent overfitting.
+     - Strong at capturing complex, non-linear relationships in data.
+     - Known for winning many Kaggle competitions and real-world ML tasks.
+
+WHY IS VOTINGENSEMBLE EFFECTIVE?
+  - REDUCES OVERFITTING: If LightGBM overfits on some data patterns,
+    XGBoost might not — averaging them cancels out individual errors.
+  - IMPROVES GENERALIZATION: Each algorithm "sees" the data differently.
+    Combining their perspectives gives a more robust prediction.
+  - HIGHER ACCURACY: On our NBA dataset, the VotingEnsemble achieved
+    100% accuracy (1.00000 score) — the best among all AutoML candidates.
+  - REDUCES VARIANCE: Individual models may fluctuate; the ensemble
+    smooths out predictions for more consistent results.
+
+HOW THE PIPELINE WORKS:
+  
+  [NBA Season Data 2016-2025]
+          |
+          v
+  [Azure ML AutoML] → Tries 50+ model configurations automatically
+          |
+          v
+  [Best Model: VotingEnsemble]
+    ├── LightGBM  → outputs probability (e.g., 0.85)
+    └── XGBoost   → outputs probability (e.g., 0.90)
+          |
+          v
+  [Soft Voting: Weighted Average] → Final probability = ~0.875
+          |
+          v
+  [Prediction CSVs] → One per division (atlantic, central, etc.)
+          |
+          v
+  [This Script] → Post-processes into JSON for web dashboard
+
+==============================================================================
+CORE CONCEPTS — POST-PROCESSING CALCULATIONS:
+==============================================================================
+
+1. NORMALIZATION (Min-Max Scaling)
+   - Raw stats (like Offensive Rating = 120.0) are on different scales.
+   - Min-Max Scaling converts ALL stats to a 0–100 scale so we can compare
+     them fairly and combine them into one "overall rating."
+   
+   Formula:  normalized = ((value - min) / (max - min)) × 100
+   
+   Global bounds across ALL 30 teams (6 divisions):
+     - Off Rating:  min = 108.5 (IND), max = 121.0 (DEN)
+     - Def Rating:  min = 105.9 (OKC), max = 121.7 (UTA)
+     - Win Pct:     min = 0.222 (SAC), max = 0.755 (OKC)
+   
+   Example:  Off Ratings range from 108.5 to 121.0 across all 30 teams:
+             - DEN with 121.0 → ((121.0 - 108.5) / (121.0 - 108.5)) × 100 = 100  (best)
+             - IND with 108.5 → ((108.5 - 108.5) / (121.0 - 108.5)) × 100 = 0    (worst)
+             - BOS with 120.0 → ((120.0 - 108.5) / (121.0 - 108.5)) × 100 = 92.0 (elite)
+
+2. DEFENSIVE RATING INVERSION
+   - Defensive Rating = points ALLOWED per 100 possessions.
+   - LOWER is BETTER (allowing fewer points = better defense).
+   - So we INVERT the normalization: def_score = 100 - normalized_value
+   - This way, the best defender gets score 100 and worst gets 0.
+   
+   Example:  Def Ratings range from 105.9 (OKC) to 121.7 (UTA):
+             - OKC 105.9 → norm = ((105.9-105.9)/(121.7-105.9))×100 = 0.0
+                         → inverted = 100 - 0.0 = 100.0 (best defense!)
+             - UTA 121.7 → norm = ((121.7-105.9)/(121.7-105.9))×100 = 100.0
+                         → inverted = 100 - 100.0 = 0.0 (worst defense!)
+             - DET 108.4 → norm = ((108.4-105.9)/(121.7-105.9))×100 = 15.8
+                         → inverted = 100 - 15.8 = 84.2 (elite defense)
+
+3. WEIGHTED OVERALL RATING
+   - We combine 3 normalized scores with weights:
+     Overall = (Offense × 0.4) + (Defense × 0.4) + (Win% × 0.2)
+   - Why 40/40/20? Offense and defense are equally important, with win
+     percentage adding context for historical consistency.
+
+4. MATCH PREDICTION (Head-to-Head)
+   - To predict who wins a game between Team A vs Team B:
+     Step 1: Get each team's season win percentage (e.g., BOS=0.642, GSW=0.528)
+     Step 2: Normalize to a head-to-head probability:
+             total = 0.642 + 0.528 = 1.170
+             BOS chance = 0.642 / 1.170 = 54.9%
+             GSW chance = 0.528 / 1.170 = 45.1%
+     Step 3: Higher chance = projected winner (BOS wins)
+     Step 4: Confidence = |54.9% - 45.1%| = 9.7% gap
+   
+   Feb 20, 2026 Example (10 games):
+     BKN(.275) vs CLE(.604) → CLE 68.7% / BKN 31.3% → CLE wins (conf 37.4)
+     DET(.745) vs NYK(.642) → DET 53.7% / NYK 46.3% → DET wins (conf 7.4)
+     SAS(.692) vs PHX(.585) → SAS 54.2% / PHX 45.8% → SAS wins (conf 8.4)
+   
+   Additional factors layered on top of raw normalization:
+     - Azure ML playoff probability (1_predicted_proba from CSVs)
+     - Net Rating differential (Off - Def for each team)
+     - 2024-25 historical trend (year-over-year trajectory)
+     - Home court adjustment (~2-3 pts, lowers road favorite confidence)
+
+==============================================================================
+"""
+
+import csv
+import json
+import os
+from collections import defaultdict
+
+
+# =============================================================================
+# STEP 1: MIN-MAX NORMALIZATION FUNCTION
+# =============================================================================
+# This function takes a raw value and scales it to a 0-100 range.
+#
+# HOW IT WORKS:
+#   - Subtract the minimum value (shifts the range to start at 0)
+#   - Divide by the range (max - min) to get a 0-to-1 ratio
+#   - Multiply by 100 to get a percentage (0-100 scale)
+#
+# EDGE CASE: If all teams have the same value (max == min), division by zero
+#            would occur, so we return 50 (middle score) as a safe default.
+#
+# EXAMPLE:
+#   normalize(115.0, 110.0, 121.0)
+#   = ((115.0 - 110.0) / (121.0 - 110.0)) × 100
+#   = (5.0 / 11.0) × 100
+#   = 45.45
+# =============================================================================
+def normalize(value, min_val, max_val):
+    """Min-Max Normalization: Scales a value to 0-100 range."""
+    if max_val == min_val:
+        return 50  # All teams are equal → default to midpoint
+    return ((value - min_val) / (max_val - min_val)) * 100
+
+
+def process_csvs():
+    # ==========================================================================
+    # STEP 2: CONFIGURATION — File paths & division-to-CSV mapping
+    # ==========================================================================
+    # Each CSV file was generated by Azure ML AutoML. One per NBA division.
+    # The Azure ML model was trained on 2016-2025 NBA season data and
+    # predicts the 2025-26 season outcomes.
+    # ==========================================================================
+    azure_folder = 'c:/Users/Vince/Downloads/NBA-Oracle/csvnba/azure_predictions'
+    csv_files = {
+        'atlantic': 'atlanticpredictions.csv',
+        'central': 'central-division_predictions.csv',
+        'southeast': 'southeast_predictions.csv',
+        'northwest': 'northwest_predictions.csv',
+        'pacific': 'pacific_predictions.csv',
+        'southwest': 'southwest_predictions.csv'
+    }
+
+    # Output JSON structure — this is what the web dashboard reads
+    final_data = {
+        "meta": {
+            "model": "Azure ML VotingEnsemble (LightGBM + XGBoost)",
+            "version": "2.1",
+            "last_updated": "2026-02-19",
+            # These are the seasons used as TRAINING DATA for the ML model
+            "dataset_seasons": [
+                "2016-17", "2017-18", "2018-19", "2019-20", "2020-21",
+                "2021-22", "2022-23", "2023-24", "2024-25", "2025-26"
+            ],
+            "prediction_target": "2025-26"
+        },
+        "divisions": {}
+    }
+
+    division_teams = defaultdict(list)  # Groups teams by division
+    all_teams_data = []                 # Flat list of ALL teams (for global min/max)
+
+    # ==========================================================================
+    # STEP 3: READ & PARSE ALL CSV FILES
+    # ==========================================================================
+    # We loop through each division's CSV file and extract:
+    #   - Current season (2025-26) data: The ML predictions for this season
+    #   - Historical data: Past seasons for trend analysis
+    #
+    # Key columns from Azure ML CSVs:
+    #   - Season_orig:       The NBA season (e.g., "2025-26")
+    #   - Team_orig:         Full team name (e.g., "Boston Celtics")
+    #   - Win_Pct_orig:      Team's win percentage (e.g., 0.642 = 64.2%)
+    #   - Off_Rating_orig:   Offensive Rating (points scored per 100 possessions)
+    #   - Def_Rating_orig:   Defensive Rating (points ALLOWED per 100 possessions)
+    #   - 1_predicted_proba: Azure ML's predicted probability of making playoffs
+    #   - MadePlayoffs_predicted: Binary prediction (1 = makes playoffs, 0 = no)
+    # ==========================================================================
+    for div_key, filename in csv_files.items():
+        filepath = os.path.join(azure_folder, filename)
+        if not os.path.exists(filepath):
+            print(f"File not found: {filepath}")
+            continue
+
+        with open(filepath, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+            # Determine conference based on division
+            # Eastern Conference: Atlantic, Central, Southeast
+            # Western Conference: Northwest, Pacific, Southwest
+            conf = "Eastern" if div_key in ['atlantic', 'central', 'southeast'] else "Western"
+
+            # Separate current season predictions from historical data
+            current_season_rows = [r for r in rows if r['Season_orig'] == '2025-26']
+            historical_rows = [r for r in rows if r['Season_orig'] != '2025-26']
+
+            # =====================================================================
+            # STEP 3a: Build Historical Data (for trend charts on the dashboard)
+            # =====================================================================
+            history_by_team = defaultdict(list)
+            for h in historical_rows:
+                history_by_team[h['Team_orig']].append({
+                    "season": h['Season_orig'],
+                    "win_pct": float(h.get('Win_Pct_orig', 0)),
+                    "off_rating": float(h.get('Off_Rating_orig', 0)),
+                    "def_rating": float(h.get('Def_Rating_orig', 0)),
+                    "made_playoffs": int(h.get('MadePlayoffs_orig', 0)) == 1
+                })
+
+            # =====================================================================
+            # STEP 3b: Process Current Season (2025-26) Predictions
+            # =====================================================================
+            for row in current_season_rows:
+                team_name = row['Team_orig']
+
+                # Azure ML gives us a probability (0.0 - 1.0) of making playoffs
+                # This is the key ML output: "1_predicted_proba"
+                prob_made_playoffs = float(row.get('1_predicted_proba', 0))
+
+                # ============================================================
+                # PLAYOFF STATUS CLASSIFICATION
+                # ============================================================
+                # We classify teams into 3 tiers based on Azure ML probability:
+                #   > 0.8 (80%+)   → "clinched"   (Almost certainly in playoffs)
+                #   < 0.2 (20%-)   → "eliminated"  (Almost certainly out)
+                #   0.2 to 0.8     → "contender"   (Still in the race)
+                # ============================================================
+                if prob_made_playoffs > 0.8:
+                    status = "clinched"
+                elif prob_made_playoffs < 0.2:
+                    status = "eliminated"
+                else:
+                    status = "contender"
+
+                # Collect the key stats from the CSV
+                stats = {
+                    "win_pct": float(row.get('Win_Pct_orig', 0)),
+                    "off_rating": float(row.get('Off_Rating_orig', 0)),
+                    "def_rating": float(row.get('Def_Rating_orig', 0)),
+                    # Net Rating = Offense - Defense
+                    # Positive = you score more than you allow (GOOD)
+                    # Negative = you allow more than you score (BAD)
+                    "net_rating": round(
+                        float(row.get('Off_Rating_orig', 0)) - float(row.get('Def_Rating_orig', 0)), 1
+                    ),
+                    "efficiency_pct": float(row.get('Win_Pct_orig', 0.5)) * 0.8
+                }
+
+                team_obj = {
+                    "team": team_name,
+                    "season": "2025-26",
+                    "stats": stats,
+                    "playoff_status": status,
+                    "historical": sorted(history_by_team[team_name], key=lambda x: x['season']),
+                    "raw_prob": prob_made_playoffs  # Keep for sorting, remove later
+                }
+                division_teams[div_key].append(team_obj)
+                all_teams_data.append(team_obj)
+
+    # ==========================================================================
+    # STEP 4: CALCULATE GLOBAL MIN/MAX FOR NORMALIZATION
+    # ==========================================================================
+    # WHY GLOBAL?
+    #   We need to compare teams ACROSS all divisions on the same scale.
+    #   If we normalized per-division, a "100" in the Atlantic might mean
+    #   Off Rating = 120, but "100" in the Pacific might mean 118.
+    #   Global normalization ensures a fair, consistent comparison.
+    #
+    # We find the minimum and maximum values across ALL 30 teams (6 divisions):
+    #   - Offensive Rating (higher = better offense)
+    #     → Current: min=108.5 (IND), max=121.0 (DEN), range=12.5
+    #   - Defensive Rating (lower = better defense)
+    #     → Current: min=105.9 (OKC), max=121.7 (UTA), range=15.8
+    #   - Win Percentage (higher = more wins)
+    #     → Current: min=0.222 (SAC), max=0.755 (OKC), range=0.533
+    # ==========================================================================
+    if not all_teams_data:
+        print("No data found!")
+        return
+
+    max_off = max(t['stats']['off_rating'] for t in all_teams_data)
+    min_off = min(t['stats']['off_rating'] for t in all_teams_data)
+    max_def = max(t['stats']['def_rating'] for t in all_teams_data)
+    min_def = min(t['stats']['def_rating'] for t in all_teams_data)
+    max_win = max(t['stats']['win_pct'] for t in all_teams_data)
+    min_win = min(t['stats']['win_pct'] for t in all_teams_data)
+
+    print(f"\n--- Normalization Bounds (Global) ---")
+    print(f"Offensive Rating: min={min_off}, max={max_off}")
+    print(f"Defensive Rating: min={min_def}, max={max_def}")
+    print(f"Win Percentage:   min={min_win}, max={max_win}")
+    print(f"-------------------------------------\n")
+
+    # ==========================================================================
+    # STEP 5: NORMALIZE SCORES & BUILD FINAL DIVISION DATA
+    # ==========================================================================
+    for div_key, teams in division_teams.items():
+        # Sort teams by Azure ML playoff probability (best first)
+        teams.sort(key=lambda x: x['raw_prob'], reverse=True)
+
+        # ======================================================================
+        # STEP 5a: Division-Level Analytics
+        # ======================================================================
+        div_analytics = {
+            "strongest_team": teams[0]['team'],
+            "weakest_team": teams[-1]['team'],
+            "playoff_teams": sum(1 for t in teams if t['playoff_status'] == 'clinched'),
+            "average_off_rating": round(sum(t['stats']['off_rating'] for t in teams) / len(teams), 1),
+            "average_def_rating": round(sum(t['stats']['def_rating'] for t in teams) / len(teams), 1),
+            "average_win_pct": round(sum(t['stats']['win_pct'] for t in teams) / len(teams), 3),
+        }
+
+        # Find the best offense and defense in this division
+        # Best offense = HIGHEST Off Rating
+        # Best defense = LOWEST Def Rating (allows fewest points)
+        best_off = max(teams, key=lambda x: x['stats']['off_rating'])
+        best_def = min(teams, key=lambda x: x['stats']['def_rating'])
+        div_analytics["best_offense"] = best_off['team']
+        div_analytics["best_defense"] = best_def['team']
+
+        # ======================================================================
+        # STEP 5b: NORMALIZE EACH TEAM'S STATS (0-100 scale)
+        # ======================================================================
+        # This is the core normalization step. For each team, using GLOBAL
+        # min/max values across all 30 teams in 6 divisions:
+        #
+        # Global bounds (2025-26 season, 30 teams):
+        #   Off Rating:  min=108.5 (IND), max=121.0 (DEN), range=12.5
+        #   Def Rating:  min=105.9 (OKC), max=121.7 (UTA), range=15.8
+        #   Win Pct:     min=0.222 (SAC), max=0.755 (OKC), range=0.533
+        #
+        # 1. OFFENSIVE SCORE (Higher raw value = Higher score = Better)
+        #    off_score = normalize(off_rating, 108.5, 121.0)
+        #    Example: BOS off_rating=120.0
+        #             → ((120.0 - 108.5) / (121.0 - 108.5)) × 100 = 92.0
+        #    Example: DEN off_rating=121.0
+        #             → ((121.0 - 108.5) / (121.0 - 108.5)) × 100 = 100.0
+        #    Example: IND off_rating=108.5
+        #             → ((108.5 - 108.5) / (121.0 - 108.5)) × 100 = 0.0
+        #
+        # 2. DEFENSIVE SCORE (Lower raw value = Better, so we INVERT)
+        #    def_norm  = normalize(def_rating, 105.9, 121.7)
+        #    def_score = 100 - def_norm
+        #    Example: OKC def_rating=105.9 (best defense)
+        #             → def_norm = ((105.9 - 105.9) / (121.7 - 105.9)) × 100 = 0.0
+        #             → def_score = 100 - 0.0 = 100.0 (best!)
+        #    Example: UTA def_rating=121.7 (worst defense)
+        #             → def_norm = ((121.7 - 105.9) / (121.7 - 105.9)) × 100 = 100.0
+        #             → def_score = 100 - 100.0 = 0.0 (worst!)
+        #    Example: DET def_rating=108.4
+        #             → def_norm = ((108.4 - 105.9) / (121.7 - 105.9)) × 100 = 15.8
+        #             → def_score = 100 - 15.8 = 84.2 (elite defense)
+        #
+        # 3. WIN PERCENTAGE SCORE (Higher = Better)
+        #    win_score = normalize(win_pct, 0.222, 0.755)
+        #    Example: OKC win_pct=0.755
+        #             → ((0.755 - 0.222) / (0.755 - 0.222)) × 100 = 100.0
+        #    Example: SAC win_pct=0.222
+        #             → ((0.222 - 0.222) / (0.755 - 0.222)) × 100 = 0.0
+        #    Example: DET win_pct=0.745
+        #             → ((0.745 - 0.222) / (0.755 - 0.222)) × 100 = 98.1
+        #
+        # 4. WEIGHTED OVERALL RATING
+        #    overall = (off_score × 0.4) + (def_score × 0.4) + (win_score × 0.2)
+        #
+        #    The weights mean:
+        #      - 40% weight on offense (how well you score)
+        #      - 40% weight on defense (how well you prevent scoring)
+        #      - 20% weight on win record (overall season success)
+        #
+        #    Example: OKC → (73.6 × 0.4) + (100.0 × 0.4) + (100.0 × 0.2)
+        #             = 29.4 + 40.0 + 20.0 = 89.4 (top overall)
+        #    Example: DET → (63.2 × 0.4) + (84.2 × 0.4) + (98.1 × 0.2)
+        #             = 25.3 + 33.7 + 19.6 = 78.6 (strong)
+        #    Example: SAC → (13.6 × 0.4) + (12.0 × 0.4) + (0.0 × 0.2)
+        #             = 5.4 + 4.8 + 0.0 = 10.2 (bottom tier)
+        # ======================================================================
+        final_teams = []
+        for t in teams:
+            # --- Offensive Score ---
+            # Higher Off Rating = Higher Score (direct normalization)
+            off_score = normalize(t['stats']['off_rating'], min_off, max_off)
+
+            # --- Defensive Score ---
+            # Lower Def Rating = Better defense, so INVERT the normalization
+            # Step A: Normalize normally (low def_rating → low score)
+            def_norm = normalize(t['stats']['def_rating'], min_def, max_def)
+            # Step B: Invert it (100 - score), so low def_rating → HIGH score
+            def_score = 100 - def_norm
+
+            # --- Win Percentage Score ---
+            # Higher Win% = Higher Score (direct normalization)
+            win_score = normalize(t['stats']['win_pct'], min_win, max_win)
+
+            # --- Weighted Overall Rating ---
+            # Combines all three scores with predefined weights
+            overall = (off_score * 0.4) + (def_score * 0.4) + (win_score * 0.2)
+
+            # Store the normalized scores in the team object
+            t['normalized_scores'] = {
+                "offensive_score": round(off_score, 1),
+                "defensive_score": round(def_score, 1),
+                "win_pct_score": round(win_score, 1),
+                "overall_rating": round(overall, 1)
+            }
+
+            # Print for debugging/verification
+            print(f"  {t['team']:30s} | OFF: {off_score:5.1f} | DEF: {def_score:5.1f} | WIN: {win_score:5.1f} | OVERALL: {overall:5.1f}")
+
+            # Remove temporary helper key (not needed in final JSON)
+            del t['raw_prob']
+            final_teams.append(t)
+
+        # Build the final division object
+        final_data['divisions'][div_key] = {
+            "name": f"{div_key.capitalize()} Division",
+            "conference": "Eastern" if div_key in ['atlantic', 'central', 'southeast'] else "Western",
+            "teams": final_teams,
+            "division_analytics": div_analytics
+        }
+
+    # ==========================================================================
+    # STEP 6: WRITE OUTPUT JSON
+    # ==========================================================================
+    output_path = 'c:/Users/Vince/Downloads/NBA-Oracle/azure_predictions.json'
+    with open(output_path, 'w') as f:
+        json.dump(final_data, f, indent=2)
+    print(f"\nSuccessfully created {output_path}")
+
+
+if __name__ == "__main__":
+    process_csvs()
