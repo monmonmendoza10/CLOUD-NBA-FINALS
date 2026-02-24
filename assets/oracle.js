@@ -131,8 +131,8 @@ function renderDivision(divKey) {
     let html = '';
 
     // --- Model Confidence Header ---
-    html += `<div style="margin-bottom: 20px; font-size: 13px; color: #555; text-align: right;">
-        <strong>Model Confidence:</strong> ${oracleData.metadata?.global_accuracy || 'N/A'}
+    html += `<div style="margin-bottom: 20px; font-size: 13px; color: #94a3b8; text-align: right;">
+        <strong style="color:#a78bfa;">Model Confidence:</strong> ${oracleData.metadata?.global_accuracy || 'N/A'}
     </div>`;
 
     // --- Teams Table (with Off Rtg, Def Rtg columns) ---
@@ -161,16 +161,16 @@ function renderDivision(divKey) {
         const pct = Math.round(team.win_prob * 100);
         html += `<td>
             <div style="display:flex; align-items:center; gap:8px;">
-                <div style="flex:1; background:#eee; height:6px; border-radius:3px; overflow:hidden; max-width:100px;">
-                    <div style="width:${pct}%; background:#1D428A; height:100%;"></div>
+                <div style="flex:1; background:rgba(148,163,184,0.15); height:6px; border-radius:3px; overflow:hidden; max-width:100px;">
+                    <div style="width:${pct}%; background:linear-gradient(135deg,#8b5cf6,#06b6d4); height:100%; border-radius:3px;"></div>
                 </div>
-                <span style="font-weight:700; font-size:12px;">${pct}%</span>
+                <span style="font-weight:700; font-size:12px; color:#f1f5f9;">${pct}%</span>
             </div>
         </td>`;
 
         // Off Rtg and Def Rtg columns
-        html += `<td style="font-weight:600; font-size:12px;">${team.off_rtg || '-'}</td>`;
-        html += `<td style="font-weight:600; font-size:12px;">${team.def_rtg || '-'}</td>`;
+        html += `<td style="font-weight:600; font-size:12px; color:#f1f5f9;">${team.off_rtg || '-'}</td>`;
+        html += `<td style="font-weight:600; font-size:12px; color:#f1f5f9;">${team.def_rtg || '-'}</td>`;
 
         html += `<td><span class="prob-badge ${statusClass}">${statusText}</span></td>`;
         html += '</tr>';
@@ -188,7 +188,7 @@ function renderDivision(divKey) {
         });
 
         if (divMatches.length > 0) {
-            html += '<h3 style="margin-top:24px; font-size:14px; text-transform:uppercase; border-bottom:2px solid #1D428A; padding-bottom:8px; letter-spacing:1px;">Feb 20 Predictions (PHT)</h3>';
+            html += '<h3 style="margin-top:24px; font-size:14px; text-transform:uppercase; border-bottom:2px solid #8b5cf6; padding-bottom:8px; letter-spacing:1px; color:#f1f5f9;">Feb 20 Predictions (PHT)</h3>';
             html += '<div class="oracle-matches-grid">';
 
             divMatches.forEach(match => {
@@ -253,7 +253,7 @@ function renderDivision(divKey) {
                     </div>
 
                     <div class="oracle-match-analysis">
-                        <div style="font-size:10px; font-weight:700; color:#1D428A; margin-bottom:4px; text-transform:uppercase; letter-spacing:1px;">\uD83E\uDDE0 AI Analysis</div>
+                        <div style="font-size:11px; font-weight:800; margin-bottom:6px; text-transform:uppercase; letter-spacing:1.2px; background:linear-gradient(135deg,#8b5cf6,#06b6d4); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">\uD83E\uDDE0 AI Analysis</div>
                         <div class="factor">${Array.isArray(match.reasoning) ? '<ul class="reasoning-list">' + match.reasoning.map(r => '<li>' + r + '</li>').join('') + '</ul>' : (match.reasoning || 'Overall Win Probability')}</div>
                     </div>
                 </div>`;
